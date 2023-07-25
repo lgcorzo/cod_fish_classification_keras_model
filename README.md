@@ -1,163 +1,75 @@
-**Caso de estudio:** Clasificación de peces de en tres tipos de bacalao
-para el reparto de trabajo en factoria pesquera. Dependiendo del tamaña
-y del tipo de bacalao el proceso al que somete al pez es diferente por
-lo que se hace necesario clasificar en 4 especies ( **HYSE , SEI, TORSK
-, LASK**) y medir la longitud del pez. luego se envían a tolvas para su
-procesado posterior. ver Imagen siguiente
+# COD CLASSIFICATION KERAS MODEL
 
-![](./Media//media/image11.png){width="6.270833333333333in"
-height="4.694444444444445in"}
+**Case Study:** Classification of fish into three types of cod for the distribution of work in a fish factory. Depending on the size and type of cod, the process to which the fish is subjected is different, so it is necessary to classify into 4 species (**HYSE, SEI, TORSK, LASK**) and measure the length of the fish. They are then sent to hoppers for further processing. See the following image.
+
+![image11](./Media//media/image11.png)
 
 **Problema:** clasificar los peces en 4 especies y medir su longitud.
 Las especies son las siguientes: **HYSE,SEI,TORSK,LASK.**
 
-![](./Media//media/image3.png){width="6.270833333333333in"
-height="4.611111111111111in"}
+![image3](./Media//media/image3.png)
 
-La cámara captura los peces según llegan por la cinta de transporte,,
-detecta el pez sobre la cinta y a partir de los fotogramas que tiene
-elimina el fondo y monta el pez longitudinalmente, ya que el campo de
-visión de la cámara no es suficiente para capturar el pez en un solo
-fotograma. se puede apreciar en las imágenes superiores.
+ **Problem:** Classify fish into 4 species and measure their length. The species are as follows: **HYSE, SEI, TORSK, LASK.**
+ The camera captures the fish as they arrive on the conveyor belt, detects the fish on the belt, and from the frames it has, it removes the background and assembles the fish longitudinally, as the camera's field of view is not sufficient to capture the fish in a single frame. This can be seen in the upper images.
+ Thus, the classification system receives the following images at a rate of 2 fish per second.
 
-Así al sistema de clasificación le llegan las siguientes imágenes con
-una cadencia de 2 peces por segundo
 
-![](./Media//media/image9.png){width="6.270833333333333in"
-height="3.763888888888889in"}
+ It seems that convolutional neural networks may be suitable for extracting the characteristics of the species through training of the images, avoiding having to parameterize the characteristics for later classification. With the aim of speeding up the classification process, faster convolutional networks **frcnn** with keras will be tested. (**faster RCNN**) these are region-based convolutional networks.
+ The training and classification have been done on a google cloud machine with an nvidia tesla K80 GPU (colab)
 
-Parece que las redes neuronales convolucionales pueden ser adecuadas
-para extraer las características de las especias mediante entrenamiento
-de las imágenes evitando tener que parametrizar las características para
-luego clasificar. Con el objetivo de acelerar el proceso de
-clasificación se van a probar redes convolucionales mas rápidas
-**frcnn** con keras. (**faster RCNN**) estas son redes convolucionales
-basadas en regiones.
-
-El entrenamiento y la clasificación se ha hecho en una máquina en cloud
-de google con una GPU tesla K80 de nvidia (colab)
-
-Actualmente la extracción de características y clasificación se hacen en
-menos de 500 msec con una tasa de acierto del 95 %, siendo necesario 30
-minutos de entrenamiento.
+ Currently, feature extraction and classification are done in less than 500 msec with a success rate of 95%, requiring 30 minutes of training.
 
 #### **Faster R-CNN**
 
-Es una RCNN donde el algoritmo de selective search se ha sustituido con
-una red neuronal rápida. Específicamente, se introdujo la region
-proposal network (RPN), una red de propuesta regional.
+ It is an RCNN where the selective search algorithm has been replaced with a fast neural network. Specifically, the region proposal network (RPN) was introduced, a regional proposal network.
 
-Cómo funciona el RPN:
+ How the RPN works:
 
--   En la última capa de una CNN inicial, una ventana deslizante de 3×3
-    > se mueve a través del mapa de características para asignarle un
-    > tamaño más pequeño (por ejemplo, 256-d).
+- On the last layer of an initial CNN, a 3×3 sliding window moves across the feature map to assign it a smaller size (for example, 256-d).
+- For each sliding window position, the RPN generates multiple possible regions based on spatial unions of fixed dimensions called anchor boxes.
+- Each regional proposal consists of:
+  - a score for the presence of the object in that particular region
+  - 4 coordinates representing the bounding box of the region.
 
--   Para cada posición de ventana deslizante, el RPN genera múltiples
-    > regiones posibles basadas en uniones espaciales de dimensiones
-    > fijas llamadas cajas de anclaje. (anchor boxes).
+![image7](./Media//media/image7.png)
 
--   Cada propuesta regional consiste en:
+ In other words, we look at our region on the last feature map, taking into account the different k anchor boxes around it. For each box, it shows whether it has an object and what the coordinates of the box are. In the image, it is represented as it appears from the position of a sliding window:
 
--   un puntaje (score) para la presencia del objeto en esa región en
-    > particular
+ The 2k score represents the probability given by softmax for each k box due to the presence of an object. It is worth noting that, although the RPN processes the coordinates of the bounding boxes, it does not classify the possible objects anyway: it has the sole purpose of identifying regions where there are objects present, therefore, communicating the coordinates with the related boxes. If an anchor box has a score, relative to the presence of an object, above a certain threshold, then that given box will be selected as a possible region.
 
-4 coordenadas que representan el cuadro delimitador de la región.
+ Having now our possible regions, we present them directly in the Fast R-CNN. We add a Pooling layer, some fully connected layers, finally a softmax classification layer and a bounding box regressor (regressive bounding box). We can say that Faster R-CNN = RPN + Fast R-CNN.
 
-En otras palabras, veamos nuestra región en el último mapa de
-características, teniendo en cuenta los diferentes k caudros de anclaje
-que lo rodean. Para cada cuadro, se muestra si esta tiene un objeto y
-cuáles son las coordenadas del cuadro. En la imagen, se representa como
-aparece desde la posición de una ventana deslizante:
+ ![image4](./Media//media/image4.png)
 
-![4 1](./Media//media/image7.png){width="6.270833333333333in"
-height="3.6944444444444446in"}
+ The Faster R-CNN thus achieves better speed and accuracy. Although there have been multiple attempts to increase the speed of object recognition, only a few models have been able to surpass this network. In other words, the Faster R-CNN is certainly not the fastest method for object detection, but it presents one of the best performances.
 
-4 1
+## Application for the case of fish
 
-La puntuación de 2k representa la probabilidad dada por softmax para
-cada caja k debido a la presencia de un objeto. Cabe señalar que, aunque
-el RPN procesa las coordenadas de los cuadros delimitadores, no
-clasifica los posibles objetos de todos modos: tiene el único propósito
-de identificar regiones en las que hay objetos presentes , por lo tanto,
-comunicar las coordenadas con los cuadros relacionados. Si un cuadro de
-anclaje tiene una puntuación, relativa a la presencia de un objeto, por
-encima de un cierto umbral, entonces esa casilla dada se seleccionará
-como una posible región.
+ A VGG-16 R-CNN has been used and the pre-trained model (nn_base) has been loaded.
+ To retrain the system, images from the annotation.txt file were used, which contains a group of images with their bounding box information necessary to use the RPN method to create the proposed bboxes.
 
-Teniendo ahora nuestras posibles regiones, las presentamos directamente
-en el Fast R-CNN. Agregamos una capa de Pooling, algunas capas
-completamente conectadas, finalmente una capa de clasificación softmax y
-un regresor de cuadros delimitadores (cuadro delimitador regresivo).
-Podemos decir que Faster R-CNN = RPN + Fast R-CNN.
+ ![image8](./Media//media/image8.png)
 
-![5 1](./Media//media/image4.png){width="6.270833333333333in"
-height="5.625in"}
+ To prepare the data, the **Object_Detection_DataPreprocessing_granit.ipynb** notebook was used, which creates the necessary folders and files for model training with the already trained images and with the defined regions.
 
-El Faster R-CNN logra así una mejor velocidad y precisión. Aunque ha
-habido múltiples intentos de aumentar la velocidad de reconocimiento de
-los objetos, solo unos pocos modelos han sido capaces de superar esta
-red. En otras palabras, el Faster R-CNN ciertamente no es el método más
-rápido para la object detection, pero presenta uno de los mejores
-rendimientos.
+ **frcnn_train_vgg.ipynb** trains the model with the images from the train folder and the annotation.txt file. The results of each epoch are saved in the record.csv file. Thus the results of the trainings with the data are as follows. Each epoch consists of training 1000 images generated by data augmentation with rotations, displacements, and mirrors.
+ ![image1](./Media//media/image1.png)
 
-## Aplicación para el caso de los peces
+![image5](./Media//media/image5.png)
 
-Se ha utilizado una R-CNN VGG-16 y se ha cargado el modelo pre-entrenado
-( nn_base) siguiente
+![image2](./Media//media/image2.png)
 
-![](./Media//media/image8.png){width="6.270833333333333in"
-height="1.7361111111111112in"}
+![image6](./Media//media/image6.png)
 
-Para reentrenar el sistema se han utilizado imágenes que provienen del
-archivo annotation.txt que contiene un grupo de imágenes con su
-información de recuadros delimitadores necesarios para usar el método
-RPN para crear los bboxes propuesta..
+ After 68000 batches, the network's precision is 0.944% with an estimation time between 2 and 0.5 seconds. The training time is 6 hours for every 40 epochs. The result is sufficient from epoch 30, thus ensuring that there is no overtraining.
 
-Para preparar los datos se ha utilizado el notebook
-**Object_Detection_DataPreprocessing_granit.ipynb** que crear las
-carpetas y ficheros necesarios para el entrenamiento del modelos con las
-imagenes de ya entrenados y con las regiones definidas.
+ **frcnn_test_vgg_granit.ipynb** this notebook allows you to see the result in selected images from a gdrive directory with images captured in another period with similar results to the previous ones.
 
-**frcnn_train_vgg.ipynb** entrena el modelo con las images de la carpeta
-train y el fichero anotation.txt. Los resultados de cada época se
-guardan en la fichero record.csv. Así los resultados de los
-entrenamientos con los datos son los siguientes. Cada época consiste en
-entrenamiento de 1000 imágenes generadas por data augmentation con
-rotaciones, desplazamientos y espejos.
+![image10](./Media//media/image10.png)
 
-![](./Media//media/image1.png){width="6.270833333333333in"
-height="2.2777777777777777in"}
+ Elapsed time = 0.7283480167388916
+ \[(\'1_HYSE\', 98.96845817565918), (\'1_HYSE\', 98.17532300949097)\]
+ In this image, the system has correctly located two HYSE type fish within the same image.
 
-![](./Media//media/image5.png){width="6.270833333333333in"
-height="2.3055555555555554in"}
-
-![](./Media//media/image2.png){width="6.270833333333333in"
-height="2.2777777777777777in"}
-
-![](./Media//media/image6.png){width="6.270833333333333in"
-height="2.3055555555555554in"}
-
-después de 68000 batches la precisión de la red es del 0.944% con un
-tiempo de estimación de entre 2 y 0.5 segundos. El tiempo de
-entrenamiento es de 6 horas por cada 40 épocas. Siendo el resultado
-suficiente a partir de la época 30 asegurando co así que no hay
-sobreentrenamiento.
-
-**frcnn_test_vgg_granit.ipynb** este cuaderno permite ver el resultado
-en imagenes seleccionadas del un directorio de gdrive con imágenes
-capturadas en otro periodo con resultado similares a los anteriores.
-
-Elapsed time = 0.7283480167388916
-
-\[(\'1_HYSE\', 98.96845817565918), (\'1_HYSE\', 98.17532300949097)\]
-
-![](./Media//media/image10.png){width="3.6145833333333335in"
-height="8.854166666666666in"}
-
-En esta imagen el sistema ha localizado dos peces del tipo HYSE
-correctamente dentro de la misma imagen.
-
-**Referencias:**
-
-[[https://towardsdatascience.com/faster-r-cnn-object-detection-implemented-by-keras-for-custom-data-from-googles-open-images-125f62b9141a]{.ul}](https://towardsdatascience.com/faster-r-cnn-object-detection-implemented-by-keras-for-custom-data-from-googles-open-images-125f62b9141a)
+ **References:**
+ [[https://towardsdatascience.com/faster-r-cnn-object-detection-implemented-by-keras-for-custom-data-from-googles-open-images-125f62b9141a]{.ul}](https://towardsdatascience.com/faster-r-cnn-object-detection-implemented-by-keras-for-custom-data-from-googles-open-images-125f62b9141a)
