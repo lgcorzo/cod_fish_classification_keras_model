@@ -1,88 +1,220 @@
-# Industrial Computer Vision: Conveyor-Belt Cod Species Classification & Length Measurement (Faster R-CNN / Keras)
+# Industrial Computer Vision: Conveyor-Belt Fish Species Classification & Length Measurement (Faster R-CNN / VGG-16 / Keras)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org/)
-[![Keras / TensorFlow](https://img.shields.io/badge/Deep%20Learning-Faster%20R--CNN%20(VGG--16)-FF6F00?style=flat-square)](https://keras.io/)
+[![Python](https://img.shields.io/badge/Python-3.6%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org/)
+[![Deep Learning](https://img.shields.io/badge/Deep%20Learning-Faster%20R--CNN%20(VGG--16%20%2F%20Keras)-FF6F00?style=flat-square)](https://keras.io/)
 [![Domain](https://img.shields.io/badge/Domain-Industrial%20Machine%20Vision-2E7D32?style=flat-square)](https://github.com/lgcorzo)
+[![Verification Status](https://img.shields.io/badge/Status-IMPLEMENTED%20%7C%20EMPIRICALLY%20EVALUATED-1976D2?style=flat-square)](#5-training-telemetry--empirical-evaluation)
 
-> **Industrial Context:** Developed for automated fish-processing lines where an overhead RGB camera inspects fish moving at **2 units/second** on a conveyor belt, stitches multi-frame captures into full longitudinal views, and classifies each specimen into four species (**`HYSE`**, **`SEI`**, **`TORSK`**, **`LASK`**) while measuring bounding-box length to route items to the corresponding processing hopper.
+> **Industrial Context & Scope:** Developed for automated Nordic whitefish and salmonid processing lines (`GRANIT` industrial dataset). An overhead line/area camera station inspects headed-and-gutted fish moving at **2 units/second** (`500 ms` takt time) along a conveyor belt, segments the conveyor background, stitches sequential frames longitudinally into composite specimens, and performs simultaneous **4-class species classification** (**`1_HYSE`**, **`2_SEI`**, **`3_TORSK`**, **`4_LASK`**) and **bounding-box length measurement** to actuate downstream sorting hoppers.
 
 ---
 
-## 1. Industrial Problem & Conveyor Pipeline
+## Table of Contents
 
-Depending on the species and size of each fish entering the factory line, downstream cutting and sorting machinery applies different processing recipes. Manual sorting creates a bottleneck, so an automated overhead RGB vision station performs real-time detection, species classification, and length estimation:
+1. [Industrial Problem & Conveyor Sorting Pipeline](#1-industrial-problem--conveyor-sorting-pipeline)
+2. [Dataset Inventory & Train/Test Split Analysis](#2-dataset-inventory--traintest-split-analysis)
+3. [Model Architecture & Hyperparameter Configuration](#3-model-architecture--hyperparameter-configuration)
+4. [Repository Structure & Execution Workflow](#4-repository-structure--execution-workflow)
+5. [Training Telemetry & Empirical Evaluation](#5-training-telemetry--empirical-evaluation)
+6. [Engineering Analysis: Original Baseline vs. Modern Edge Vision](#6-engineering-analysis-original-baseline-vs-modern-edge-vision)
+7. [References & License](#7-references--license)
+
+---
+
+## 1. Industrial Problem & Conveyor Sorting Pipeline
+
+In high-throughput seafood processing factories, downstream cutting, filleting, and portioning machinery requires species-specific and size-specific mechanical parameters. Manual sorting at the infeed conveyor creates an operational bottleneck, motivating an automated overhead computer vision station capable of:
+
+1. **Species Classification:** Distinguishing four commercial North Atlantic / Norwegian fisheries species (`HYSE`, `SEI`, `TORSK`, `LASK`).
+2. **Physical Length Estimation:** Computing the longitudinal bounding-box span ($\Delta y = y_2 - y_1$ and $\Delta x = x_2 - x_1$ in calibrated conveyor pixels) to grade specimens into size-specific hoppers.
 
 ![Industrial conveyor and hopper sorting layout](./Media/media/image11.png)
 
 ### Multi-Frame Longitudinal Stitching & Background Removal
-Because the camera's field of view is narrower than a full specimen on the moving belt, the acquisition pipeline:
-1. Captures sequential RGB frames as the fish passes under the camera.
-2. Segments and removes the conveyor background.
-3. Assembles the fish longitudinally into a single composite frame at a throughput of **2 fish/second** (`< 500 ms` budget per inference).
+
+Because a single camera field of view is narrower than a full specimen traveling at high speed on the belt, the upstream acquisition pipeline performs:
+
+1. **Sequential Frame Capture:** Acquires synchronized **RGB** (`RGB_*.jpg`) and **Near-Infrared** (`NIR_*.jpg`) frames as each fish crosses the inspection line.
+2. **Background Segmentation:** Strips the conveyor belt background, isolating the fish silhouette on a zeroed (`0, 0, 0`) canvas.
+3. **Longitudinal Frame Assembly:** Concatenates sequential slices into a single composite image (visible as horizontal stitching seams across long specimens) at a line cadence of **2 fish/second**.
+
+![Composite stitched RGB conveyor captures](./Media/media/image9.png)
+
+### Target Species Taxonomy
+
+| Class ID | Label Code | Norwegian Name | English Common Name | Scientific Name | Morphometric Profile in Dataset (Median $\text{W} \times \text{H}$ px) |
+| :---: | :--- | :--- | :--- | :--- | :---: |
+| `0` | **`1_HYSE`** | Hyse | Haddock | *Melanogrammus aeglefinus* | $196 \times 438\text{ px}$ (distinct dark lateral line, pale belly) |
+| `1` | **`2_SEI`** | Sei | Saithe / Pollock | *Pollachius virens* | $166 \times 412\text{ px}$ (straight pale lateral line, darker dorsum) |
+| `2` | **`3_TORSK`** | Torsk | Atlantic Cod | *Gadus morhua* | $187 \times 476\text{ px}$ (mottled olive/brown skin, curved lateral line) |
+| `3` | **`4_LASK`** | Laks (`LASK`) | Atlantic Salmon | *Salmo salar* | $186 \times 292\text{ px}$ (silver-pink pigmentation / fillet profile) |
+| `4` | **`bg`** | — | Background | Negative Anchor Class | Non-object / conveyor background proposals |
 
 ![Segmented and stitched specimens across the 4 target classes](./Media/media/image3.png)
 
 ---
 
-## 2. Model Architecture: Faster R-CNN with VGG-16 Backbone
+## 2. Dataset Inventory & Train/Test Split Analysis
 
-To avoid brittle hand-crafted morphological parameterizations across lighting and scale variations, the pipeline uses **Faster R-CNN** with a pre-trained **VGG-16** backbone (`nn_base`), combining a **Region Proposal Network (RPN)** with a Fast R-CNN detector and bounding-box regressor:
+The repository includes the raw dual-spectrum corpus under [`Trained/`](./Trained) (`10,942` images total: `5,472` RGB and `5,470` NIR) and the preprocessed RGB detection splits under [`train/`](./train) and [`test/`](./test) generated by [`Object_Detection_DataPreprocessing_granit.ipynb`](./Object_Detection_DataPreprocessing_granit.ipynb).
 
-- **Shared Convolutional Feature Map (VGG-16):** Extracts spatial feature maps from each stitched conveyor image.
-- **Region Proposal Network (RPN):** Slides a `3×3` window across the feature map and evaluates `k` anchor boxes per position, outputting objectness scores (`2k` softmax probabilities) and `4k` bounding-box regression offsets:
+### Complete Corpus Breakdown
 
-![RPN anchor box evaluation](./Media/media/image7.png)
+| Class Directory | Total Raw Files (`Trained/`) | Raw RGB (`RGB_*.jpg`) | Raw NIR (`NIR_*.jpg`) | Training Split (`annotation.txt` / `train.csv`) | Test Split (`test_annotation.txt` / `test.csv`) | Bounding-Box Height Range ($\Delta y$ px) |
+| :--- | ---: | ---: | ---: | ---: | ---: | :---: |
+| [`Trained/0_Unknown`](./Trained/0_Unknown) | 438 | 219 | 219 | *Excluded* (0) | *Excluded* (0) | Unlabeled / rejected captures |
+| [`Trained/1_HYSE`](./Trained/1_HYSE) | 1,406 | 703 | 703 | 703 | 0 | $80\text{ – }909\text{ px}$ (median $395\text{ px}$) |
+| [`Trained/2_SEI`](./Trained/2_SEI) | 1,312 | 656 | 656 | 656 | 0 | $77\text{ – }856\text{ px}$ (median $371\text{ px}$) |
+| [`Trained/3_TORSK`](./Trained/3_TORSK) | 7,658 | 3,829 | 3,829 | 800 | 3,029 | $66\text{ – }1,018\text{ px}$ (median $429\text{ px}$) |
+| [`Trained/4_LASK`](./Trained/4_LASK) | 128 | 65 | 63 | 65 | 0 | $90\text{ – }564\text{ px}$ (median $263\text{ px}$) |
+| **Total** | **10,942** | **5,472** | **5,470** | **2,224 rows** (`2,223` unique files)* | **3,029 rows** (`3,029` unique files) | — |
 
-- **RoI Pooling & Classification Head:** Projects high-scoring proposals into fixed-size feature maps, classifying the region into **`HYSE`**, **`SEI`**, **`TORSK`**, or **`LASK`** while refining the bounding box coordinates used for physical length estimation:
+*\*Note: `train/` contains `2,223` unique `.jpg` files on disk because one filename is shared across two classes in `Trained/`, producing `2,224` rows in `annotation.txt`.*
 
-![Faster R-CNN architecture](./Media/media/image4.png)
-
----
-
-## 3. Repository Structure & Notebooks
-
-| File / Directory | Description |
-| :--- | :--- |
-| [`Object_Detection_DataPreprocessing_granit.ipynb`](./Object_Detection_DataPreprocessing_granit.ipynb) | Parses raw bounding-box annotations (`train.csv`, `test.csv`) and generates Faster R-CNN training manifest files (`annotation.txt`, `test_annotation.txt`). |
-| [`frcnn_train_vgg.ipynb`](./frcnn_train_vgg.ipynb) | End-to-end Faster R-CNN training notebook (VGG-16 backbone, RPN + classifier heads, data augmentation with horizontal/vertical flips and rotations, 1,000 samples/epoch). |
-| [`frcnn_test_vgg.ipynb`](./frcnn_test_vgg.ipynb) / [`frcnn_test_vgg_granit.ipynb`](./frcnn_test_vgg_granit.ipynb) | Evaluation and inference notebooks computing mAP, bounding-box localization, class probabilities, and per-frame latency on held-out conveyor captures. |
-| `train/` & `test/` | Sample RGB conveyor captures (`RGB_*.jpg`) and corresponding bounding-box annotations. |
-| `model/` & `Trained/` | Model configuration (`model_vgg_config.pickle`), training epoch logs (`record.csv`), and loss/accuracy telemetry. |
-
----
-
-## 4. Training Telemetry & Industrial Performance
-
-Training was conducted on an NVIDIA Tesla K80 GPU using 1,000 augmented samples per epoch (rotations, translations, and mirror flips) from `annotation.txt`:
+> [!IMPORTANT]
+> **Dataset Split & Weak-Supervision Characteristics (Code-Verified in [`Object_Detection_DataPreprocessing_granit.ipynb`](./Object_Detection_DataPreprocessing_granit.ipynb)):**
+> 1. **800-Sample Cap Split Artifact:** Cell 8 slices each class after filtering out `NIR_*` images using `train_imgs = all_imgs[:800]` and `test_imgs = all_imgs[800:]`. Because only `3_TORSK` exceeds 800 RGB images (`3,829`), `test_annotation.txt` (`3,029` samples) consists **100% of `3_TORSK`** specimens. Multi-class out-of-sample evaluation was therefore performed using [`frcnn_test_vgg_granit.ipynb`](./frcnn_test_vgg_granit.ipynb) against separate production captures (`GRANIT_TRAINED_16.02.2018`).
+> 2. **Weakly Supervised Bounding Boxes:** Because raw images are already background-segmented and cropped tightly around each specimen, preprocessing assigns a uniform normalized bounding box (`XMin=0.05, XMax=0.95, YMin=0.05, YMax=0.95`) converted into pixel coordinates in `annotation.txt`:
+>    ```text
+>    filepath,x1,y1,x2,y2,class_name
+>    train/RGB_63642838276284.jpg,10,18,199,358,1_HYSE
+>    ```
 
 ![Annotation bounding-box format](./Media/media/image8.png)
 
-### Convergence & Loss Curves (68,000 Batches / 40 Epochs)
+---
 
-| Metric | Result |
+## 3. Model Architecture & Hyperparameter Configuration
+
+Rather than relying on brittle hand-crafted morphological thresholds, the pipeline implements **Faster R-CNN** (Ren et al., 2015) with a **VGG-16** convolutional backbone (`nn_base`) in Keras (TensorFlow backend), jointly optimizing region proposal generation, multi-class species classification, and bounding-box regression.
+
+```mermaid
+flowchart LR
+    A["Stitched RGB Frame<br/>(Min Side Resized to 300 px)"] --> B["VGG-16 Backbone (nn_base)<br/>Block 1–5 Conv3x3 (512 ch)<br/>Stride = 16"]
+    B --> C["Shared Feature Map F<br/>(W/16 × H/16 × 512)"]
+    C --> D["Region Proposal Network (RPN)<br/>3×3 Conv + 9 Anchors/loc<br/>Scales: 64, 128, 256 px<br/>Ratios: 1:1, 1:√2, √2:1"]
+    D --> E["NMS Proposal Filtering<br/>(overlap_thresh = 0.7)<br/>Top 300 RoIs"]
+    C --> F["RoI Pooling Conv Layer<br/>(7×7 Spatial Grid, 4 RoIs/step)"]
+    E --> F
+    F --> G["Fast R-CNN Head<br/>TimeDistributed FC(4096) × 2<br/>+ Dropout(0.5)"]
+    G --> H["Softmax Classifier<br/>(1_HYSE, 2_SEI, 3_TORSK, 4_LASK, bg)"]
+    G --> I["Linear BBox Regressor<br/>4 × (tx, ty, tw, th) → Fish Length"]
+```
+
+### Architectural Components
+
+1. **Shared VGG-16 Feature Extractor (`nn_base`):** Five convolutional blocks (`64 → 128 → 256 → 512 → 512` filters) with four $2 \times 2$ max-pooling stages yielding an effective spatial stride of `rpn_stride = 16`.
+2. **Region Proposal Network (`rpn_layer`):** Slides a $3 \times 3$ window (`512` channels) over the shared feature map and branches into two $1 \times 1$ sibling convolutional layers evaluating $k = 9$ anchors per spatial location:
+   - **Objectness head (`rpn_out_class`):** `9`-channel sigmoid output scoring foreground vs. background.
+   - **Box regression head (`rpn_out_regress`):** `36`-channel linear output predicting $(\Delta x, \Delta y, \Delta w, \Delta h)$.
+
+![RPN anchor box evaluation](./Media/media/image7.png)
+
+3. **Custom RoI Pooling Layer (`RoiPoolingConv`) & Fast R-CNN Detector (`classifier_layer`):** Projects each candidate region into a fixed $7 \times 7 \times 512$ tensor, passes it through two `TimeDistributed(Dense(4096, activation='relu'))` layers with `Dropout(0.5)`, and outputs class probabilities alongside class-specific bounding-box refinements:
+
+![Faster R-CNN architecture](./Media/media/image4.png)
+
+### Serialized Configuration ([`model_vgg_config.pickle`](./model_vgg_config.pickle))
+
+All training and inference parameters are persisted in `model_vgg_config.pickle` (`class Config`):
+
+| Parameter | Value in `model_vgg_config.pickle` | Purpose |
+| :--- | :--- | :--- |
+| `network` | `'vgg'` | VGG-16 convolutional backbone |
+| `im_size` | `300` | Shortest image side resized to `300 px` (preserving aspect ratio) |
+| `anchor_box_scales` | `[64, 128, 256]` | Anchor box scales in pixels |
+| `anchor_box_ratios` | `[[1, 1], [1/√2, √2], [√2, 1/√2]]` | Aspect ratios ($1:1$, $1:\sqrt{2}$, $\sqrt{2}:1$) → $k=9$ anchors |
+| `rpn_stride` | `16` | Feature map downsampling factor from VGG-16 pooling |
+| `rpn_min_overlap` / `rpn_max_overlap` | `0.3` / `0.7` | IoU thresholds for negative ($<0.3$) and positive ($>0.7$) RPN anchors |
+| `classifier_min_overlap` / `max_overlap` | `0.1` / `0.5` | IoU thresholds for RoI background ($[0.1, 0.5)$) vs. foreground ($\ge 0.5$) |
+| `num_rois` | `4` | Number of Regions of Interest processed per batch step |
+| `use_horizontal_flips` / `vertical_flips` | `True` / `True` | Online spatial augmentation during training |
+| `rot_90` | `True` | Random $90^\circ$ rotation augmentation during training |
+| `img_channel_mean` | `[103.939, 116.779, 123.68]` | ImageNet BGR channel mean subtraction |
+| `class_mapping` | `{'1_HYSE': 0, '2_SEI': 1, '3_TORSK': 2, '4_LASK': 3, 'bg': 4}` | Target index mapping |
+| `optimizer` | `Adam(lr=1e-5)` | Optimizer for both `model_rpn` and `model_classifier` |
+
+---
+
+## 4. Repository Structure & Execution Workflow
+
+| Path | Role & Contents |
 | :--- | :--- |
-| **Classification Accuracy** | **94.4% – 95.0%** (converges cleanly around epoch 30 without overfitting) |
-| **Inference Latency** | **~500 ms – 728 ms** per composite frame |
-| **Target Classes** | `1_HYSE` (Haddock), `2_SEI` (Saithe), `3_TORSK` (Atlantic Cod), `4_LASK` (Salmon) |
+| [`Object_Detection_DataPreprocessing_granit.ipynb`](./Object_Detection_DataPreprocessing_granit.ipynb) | Filters `RGB_*.jpg` captures from [`Trained/`](./Trained), builds `train/` (`2,223` files) and `test/` (`3,029` files), and writes [`train.csv`](./train.csv), [`test.csv`](./test.csv), [`annotation.txt`](./annotation.txt), and [`test_annotation.txt`](./test_annotation.txt). |
+| [`frcnn_train_vgg.ipynb`](./frcnn_train_vgg.ipynb) | End-to-end Faster R-CNN training pipeline (`RoiPoolingConv`, `nn_base`, `rpn_layer`, `classifier_layer`, anchor target generator, multi-session checkpointing to `./model/model_frcnn_vgg.hdf5`, and epoch telemetry logging to [`model/record.csv`](./model/record.csv)). |
+| [`frcnn_test_vgg.ipynb`](./frcnn_test_vgg.ipynb) | Evaluation notebook running inference and PASCAL VOC Average Precision (`get_map`, IoU $\ge 0.5$) on [`test_annotation.txt`](./test_annotation.txt). |
+| [`frcnn_test_vgg_granit.ipynb`](./frcnn_test_vgg_granit.ipynb) | Production inference notebook testing multi-fish conveyor captures (`bbox_threshold = 0.7`, NMS `overlap_thresh = 0.2`) and rendering bounding boxes + confidence scores. |
+| [`model/record.csv`](./model/record.csv) | Complete 68-epoch (`68,000` batches) training telemetry log recording accuracy, 4-part loss breakdown, overlapping RPN proposals, and per-epoch execution time. |
+| [`model_vgg_config.pickle`](./model_vgg_config.pickle) | Pickled `Config` instance consumed by the test notebooks to reconstruct the exact network topology and preprocessing parameters. |
+| [`Media/media/`](./Media/media) | Architectural diagrams, conveyor hopper photos, composite specimen examples, and training convergence plots (`image1.png` – `image11.png`). |
+| [`Sistema de clasificación de bacalao con cámara RGB.docx`](./Sistema%20de%20clasificaci%C3%B3n%20de%20bacalao%20con%20c%C3%A1mara%20RGB.docx) | Original Spanish engineering case study report documenting the industrial problem, RPN theory, and experimental results. |
 
-![Classifier accuracy over epochs](./Media/media/image1.png)
-![RPN & Classifier bounding-box regression loss](./Media/media/image5.png)
-![Total loss progression](./Media/media/image2.png)
-![Epoch convergence summary](./Media/media/image6.png)
+> [!NOTE]
+> **External Model Weights (`> 100 MB`):** Pre-trained ImageNet weights (`./model/vgg16_weights_tf_dim_ordering_tf_kernels.h5`) and the trained Faster R-CNN checkpoint (`./model/model_frcnn_vgg.hdf5`) are excluded from Git tracking due to GitHub file-size limits and were mounted via Google Drive during Colab execution.
 
-### Sample Inference Output
+---
+
+## 5. Training Telemetry & Empirical Evaluation
+
+Training was executed on Google Colaboratory (NVIDIA Tesla K80 GPU) across two consecutive training sessions totaling **68 epochs** (`1,000` augmented batches per epoch = **68,000 batches**), logged in [`model/record.csv`](./model/record.csv):
+
+### Epoch Progression Summary (Verified from [`model/record.csv`](./model/record.csv))
+
+| Training Milestone | Epoch | Cumulative Batches | Mean Overlapping BBoxes | RoI Classifier Accuracy (`class_acc`) | RPN Cls Loss | RPN Regr Loss | Detector Cls Loss | Detector Regr Loss | Total Loss (`curr_loss`) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Initial Epoch** | `1` | `1,000` | `6.414` | `60.9%` (`0.609`) | `5.288` | `0.451` | `0.916` | `0.424` | `7.079` |
+| **Early Convergence** | `10` | `10,000` | `8.490` | `85.8%` (`0.858`) | `0.161` | `0.127` | `0.362` | `0.107` | `0.758` |
+| **Session 1 Checkpoint** | `30` | `30,000` | `8.210` | `92.2%` (`0.922`) | `0.113` | `0.085` | `0.217` | `0.069` | `0.484` |
+| **Peak Accuracy Epoch** | `60` | `60,000` | `8.055` | **`94.3%` (`0.943`)** | `0.133` | `0.061` | `0.157` | `0.050` | `0.401` |
+| **Minimum Total Loss** | `62` | `62,000` | `8.048` | `93.4%` (`0.934`) | `0.090` | `0.057` | `0.178` | `0.050` | **`0.375`** |
+| **Final Logged Epoch** | `68` | `68,000` | `7.831` | **`93.8%` (`0.938`)** | `0.112` | `0.058` | `0.167` | `0.050` | `0.386` |
+
+### Convergence & Loss Curves (`68` Epochs / `68,000` Batches)
+
+1. **Mean Overlapping RPN Boxes & Classifier Accuracy (`image1.png`):** RPN rapidly locks onto ~8 overlapping positive proposals per specimen while RoI classification accuracy climbs from `60.9%` to a stable `93.4% – 94.3%` plateau after epoch 30 without overfitting.
+   ![Mean overlapping bounding boxes and classifier accuracy](./Media/media/image1.png)
+
+2. **RPN Classification & Bounding-Box Regression Losses (`image5.png`):**
+   ![RPN classification and regression loss](./Media/media/image5.png)
+
+3. **Detector Head Classification & Regression Losses (`image2.png`):**
+   ![Detector classification and regression loss](./Media/media/image2.png)
+
+4. **Total Combined Loss & Per-Epoch Runtime (`image6.png`):** (Note the spike at Epoch 31 where the second Colab session resumed from `./model/model_frcnn_vgg.hdf5` after `30,000` batches.)
+   ![Total loss and elapsed time](./Media/media/image6.png)
+
+### Inference Latency & Multi-Specimen Detection
+
+On held-out production images in [`frcnn_test_vgg_granit.ipynb`](./frcnn_test_vgg_granit.ipynb) (Cell 39), per-frame inference on the Tesla K80 GPU averaged **`0.60 s – 0.83 s`** (e.g., `0.728 s` on dual-specimen frame `RGB_63678812065611.jpg`), successfully localizing and classifying multiple overlapping fish in a single composite frame:
 
 ![Dual specimen detection and classification on conveyor belt](./Media/media/image10.png)
 
 ```text
-Elapsed time = 0.728 s
+Image: RGB_63678812065611.jpg
+Elapsed time = 0.7283 s
 Detections: [('1_HYSE', 98.97%), ('1_HYSE', 98.18%)]
 ```
 
 ---
 
-## 5. References & License
+## 6. Engineering Analysis: Original Baseline vs. Modern Edge Vision
 
-- Ren, S., He, K., Girshick, R., & Sun, J. (2015). *Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks*. Advances in Neural Information Processing Systems (NeurIPS).
-- Licensed under the [MIT License](./LICENSE).
+This repository preserves the original **2018 industrial research baseline** (`Keras 2.2 / TensorFlow 1.x`, Faster R-CNN with VGG-16). For engineers adapting this dataset (`10,942` RGB+NIR conveyor captures) to modern production lines, the table below contrasts the historical implementation against current state-of-the-art industrial vision architectures:
+
+| Dimension | 2018 Baseline (Implemented in Repo) | Modern Industrial Upgrade Path (`PLANNED` / Reference) |
+| :--- | :--- | :--- |
+| **Detection Architecture** | Two-stage **Faster R-CNN** (`VGG-16` backbone + custom `RoiPoolingConv`, 138M parameters) | Single-stage anchor-free **YOLOv11 / YOLOv8-OBB** (Oriented Bounding Boxes) or **RT-DETR** |
+| **Inference Latency** | `600 – 830 ms` per frame on Tesla K80 (Sequential Python RoI loop in `num_rois = 4` chunks) | **`< 5 ms – 12 ms`** per frame via **TensorRT FP16/INT8** on NVIDIA Jetson Orin / Triton Inference Server (easily exceeding the `500 ms` / 2 fish/sec budget) |
+| **Length Measurement** | Axis-aligned bounding box ($\Delta y = y_2 - y_1$) on pre-segmented frames (`0.05 – 0.95` proxy labels) | **Instance Segmentation (`YOLOv8-seg` / `Mask2Former`) + Medial Axis Skeletonization** to measure true curved fork/total length even when fish bend on the belt |
+| **Spectral Channels** | Filtered to 3-channel **RGB** (`NIR_*` excluded during preprocessing) | **4-Channel Multispectral Fusion (RGB + NIR)** leveraging the `5,470` paired `NIR_*.jpg` captures in `Trained/` to improve skin/fat contrast under wet factory glare |
+| **Class Imbalance & Split** | Fixed 800-image cap per class (leaving `test/` with `3_TORSK` only and `4_LASK` with `65` samples) | **Stratified $k$-Fold Cross-Validation** (`80/10/10` per species) with **Focal Loss** and Copy-Paste augmentation for minority class `4_LASK` |
+
+---
+
+## 7. References & License
+
+- **Foundational Paper:** Ren, S., He, K., Girshick, R., & Sun, J. (2015). *Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks*. Advances in Neural Information Processing Systems (NeurIPS), 28.
+- **Spatial Pyramid / RoI Pooling:** He, K., Zhang, X., Ren, S., & Sun, J. (2015). *Spatial Pyramid Pooling in Deep Convolutional Networks for Visual Recognition*. IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI), 37(9), 1904–1916.
+- **Keras Faster R-CNN Reference Implementation:** Rocky Xu, *Faster R-CNN Object Detection Implemented by Keras for Custom Data from Google's Open Images*.
+- **License:** Distributed under the [MIT License](./LICENSE).
