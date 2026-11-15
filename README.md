@@ -1,75 +1,88 @@
-# COD CLASSIFICATION KERAS MODEL
+# Industrial Computer Vision: Conveyor-Belt Cod Species Classification & Length Measurement (Faster R-CNN / Keras)
 
-**Case Study:** Classification of fish into three types of cod for the distribution of work in a fish factory. Depending on the size and type of cod, the process to which the fish is subjected is different, so it is necessary to classify into 4 species (**HYSE, SEI, TORSK, LASK**) and measure the length of the fish. They are then sent to hoppers for further processing. See the following image.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org/)
+[![Keras / TensorFlow](https://img.shields.io/badge/Deep%20Learning-Faster%20R--CNN%20(VGG--16)-FF6F00?style=flat-square)](https://keras.io/)
+[![Domain](https://img.shields.io/badge/Domain-Industrial%20Machine%20Vision-2E7D32?style=flat-square)](https://github.com/lgcorzo)
 
-![image11](./Media//media/image11.png)
+> **Industrial Context:** Developed for automated fish-processing lines where an overhead RGB camera inspects fish moving at **2 units/second** on a conveyor belt, stitches multi-frame captures into full longitudinal views, and classifies each specimen into four species (**`HYSE`**, **`SEI`**, **`TORSK`**, **`LASK`**) while measuring bounding-box length to route items to the corresponding processing hopper.
 
-**Problema:** clasificar los peces en 4 especies y medir su longitud.
-Las especies son las siguientes: **HYSE,SEI,TORSK,LASK.**
+---
 
-![image3](./Media//media/image3.png)
+## 1. Industrial Problem & Conveyor Pipeline
 
- **Problem:** Classify fish into 4 species and measure their length. The species are as follows: **HYSE, SEI, TORSK, LASK.**
- The camera captures the fish as they arrive on the conveyor belt, detects the fish on the belt, and from the frames it has, it removes the background and assembles the fish longitudinally, as the camera's field of view is not sufficient to capture the fish in a single frame. This can be seen in the upper images.
- Thus, the classification system receives the following images at a rate of 2 fish per second.
+Depending on the species and size of each fish entering the factory line, downstream cutting and sorting machinery applies different processing recipes. Manual sorting creates a bottleneck, so an automated overhead RGB vision station performs real-time detection, species classification, and length estimation:
 
+![Industrial conveyor and hopper sorting layout](./Media/media/image11.png)
 
- It seems that convolutional neural networks may be suitable for extracting the characteristics of the species through training of the images, avoiding having to parameterize the characteristics for later classification. With the aim of speeding up the classification process, faster convolutional networks **frcnn** with keras will be tested. (**faster RCNN**) these are region-based convolutional networks.
- The training and classification have been done on a google cloud machine with an nvidia tesla K80 GPU (colab)
+### Multi-Frame Longitudinal Stitching & Background Removal
+Because the camera's field of view is narrower than a full specimen on the moving belt, the acquisition pipeline:
+1. Captures sequential RGB frames as the fish passes under the camera.
+2. Segments and removes the conveyor background.
+3. Assembles the fish longitudinally into a single composite frame at a throughput of **2 fish/second** (`< 500 ms` budget per inference).
 
- Currently, feature extraction and classification are done in less than 500 msec with a success rate of 95%, requiring 30 minutes of training.
+![Segmented and stitched specimens across the 4 target classes](./Media/media/image3.png)
 
-#### **Faster R-CNN**
+---
 
- It is an RCNN where the selective search algorithm has been replaced with a fast neural network. Specifically, the region proposal network (RPN) was introduced, a regional proposal network.
+## 2. Model Architecture: Faster R-CNN with VGG-16 Backbone
 
- How the RPN works:
+To avoid brittle hand-crafted morphological parameterizations across lighting and scale variations, the pipeline uses **Faster R-CNN** with a pre-trained **VGG-16** backbone (`nn_base`), combining a **Region Proposal Network (RPN)** with a Fast R-CNN detector and bounding-box regressor:
 
-- On the last layer of an initial CNN, a 3×3 sliding window moves across the feature map to assign it a smaller size (for example, 256-d).
-- For each sliding window position, the RPN generates multiple possible regions based on spatial unions of fixed dimensions called anchor boxes.
-- Each regional proposal consists of:
-  - a score for the presence of the object in that particular region
-  - 4 coordinates representing the bounding box of the region.
+- **Shared Convolutional Feature Map (VGG-16):** Extracts spatial feature maps from each stitched conveyor image.
+- **Region Proposal Network (RPN):** Slides a `3×3` window across the feature map and evaluates `k` anchor boxes per position, outputting objectness scores (`2k` softmax probabilities) and `4k` bounding-box regression offsets:
 
-![image7](./Media//media/image7.png)
+![RPN anchor box evaluation](./Media/media/image7.png)
 
- In other words, we look at our region on the last feature map, taking into account the different k anchor boxes around it. For each box, it shows whether it has an object and what the coordinates of the box are. In the image, it is represented as it appears from the position of a sliding window:
+- **RoI Pooling & Classification Head:** Projects high-scoring proposals into fixed-size feature maps, classifying the region into **`HYSE`**, **`SEI`**, **`TORSK`**, or **`LASK`** while refining the bounding box coordinates used for physical length estimation:
 
- The 2k score represents the probability given by softmax for each k box due to the presence of an object. It is worth noting that, although the RPN processes the coordinates of the bounding boxes, it does not classify the possible objects anyway: it has the sole purpose of identifying regions where there are objects present, therefore, communicating the coordinates with the related boxes. If an anchor box has a score, relative to the presence of an object, above a certain threshold, then that given box will be selected as a possible region.
+![Faster R-CNN architecture](./Media/media/image4.png)
 
- Having now our possible regions, we present them directly in the Fast R-CNN. We add a Pooling layer, some fully connected layers, finally a softmax classification layer and a bounding box regressor (regressive bounding box). We can say that Faster R-CNN = RPN + Fast R-CNN.
+---
 
- ![image4](./Media//media/image4.png)
+## 3. Repository Structure & Notebooks
 
- The Faster R-CNN thus achieves better speed and accuracy. Although there have been multiple attempts to increase the speed of object recognition, only a few models have been able to surpass this network. In other words, the Faster R-CNN is certainly not the fastest method for object detection, but it presents one of the best performances.
+| File / Directory | Description |
+| :--- | :--- |
+| [`Object_Detection_DataPreprocessing_granit.ipynb`](./Object_Detection_DataPreprocessing_granit.ipynb) | Parses raw bounding-box annotations (`train.csv`, `test.csv`) and generates Faster R-CNN training manifest files (`annotation.txt`, `test_annotation.txt`). |
+| [`frcnn_train_vgg.ipynb`](./frcnn_train_vgg.ipynb) | End-to-end Faster R-CNN training notebook (VGG-16 backbone, RPN + classifier heads, data augmentation with horizontal/vertical flips and rotations, 1,000 samples/epoch). |
+| [`frcnn_test_vgg.ipynb`](./frcnn_test_vgg.ipynb) / [`frcnn_test_vgg_granit.ipynb`](./frcnn_test_vgg_granit.ipynb) | Evaluation and inference notebooks computing mAP, bounding-box localization, class probabilities, and per-frame latency on held-out conveyor captures. |
+| `train/` & `test/` | Sample RGB conveyor captures (`RGB_*.jpg`) and corresponding bounding-box annotations. |
+| `model/` & `Trained/` | Model configuration (`model_vgg_config.pickle`), training epoch logs (`record.csv`), and loss/accuracy telemetry. |
 
-## Application for the case of fish
+---
 
- A VGG-16 R-CNN has been used and the pre-trained model (nn_base) has been loaded.
- To retrain the system, images from the annotation.txt file were used, which contains a group of images with their bounding box information necessary to use the RPN method to create the proposed bboxes.
+## 4. Training Telemetry & Industrial Performance
 
- ![image8](./Media//media/image8.png)
+Training was conducted on an NVIDIA Tesla K80 GPU using 1,000 augmented samples per epoch (rotations, translations, and mirror flips) from `annotation.txt`:
 
- To prepare the data, the **Object_Detection_DataPreprocessing_granit.ipynb** notebook was used, which creates the necessary folders and files for model training with the already trained images and with the defined regions.
+![Annotation bounding-box format](./Media/media/image8.png)
 
- **frcnn_train_vgg.ipynb** trains the model with the images from the train folder and the annotation.txt file. The results of each epoch are saved in the record.csv file. Thus the results of the trainings with the data are as follows. Each epoch consists of training 1000 images generated by data augmentation with rotations, displacements, and mirrors.
- ![image1](./Media//media/image1.png)
+### Convergence & Loss Curves (68,000 Batches / 40 Epochs)
 
-![image5](./Media//media/image5.png)
+| Metric | Result |
+| :--- | :--- |
+| **Classification Accuracy** | **94.4% – 95.0%** (converges cleanly around epoch 30 without overfitting) |
+| **Inference Latency** | **~500 ms – 728 ms** per composite frame |
+| **Target Classes** | `1_HYSE` (Haddock), `2_SEI` (Saithe), `3_TORSK` (Atlantic Cod), `4_LASK` (Salmon) |
 
-![image2](./Media//media/image2.png)
+![Classifier accuracy over epochs](./Media/media/image1.png)
+![RPN & Classifier bounding-box regression loss](./Media/media/image5.png)
+![Total loss progression](./Media/media/image2.png)
+![Epoch convergence summary](./Media/media/image6.png)
 
-![image6](./Media//media/image6.png)
+### Sample Inference Output
 
- After 68000 batches, the network's precision is 0.944% with an estimation time between 2 and 0.5 seconds. The training time is 6 hours for every 40 epochs. The result is sufficient from epoch 30, thus ensuring that there is no overtraining.
+![Dual specimen detection and classification on conveyor belt](./Media/media/image10.png)
 
- **frcnn_test_vgg_granit.ipynb** this notebook allows you to see the result in selected images from a gdrive directory with images captured in another period with similar results to the previous ones.
+```text
+Elapsed time = 0.728 s
+Detections: [('1_HYSE', 98.97%), ('1_HYSE', 98.18%)]
+```
 
-![image10](./Media//media/image10.png)
+---
 
- Elapsed time = 0.7283480167388916
- \[(\'1_HYSE\', 98.96845817565918), (\'1_HYSE\', 98.17532300949097)\]
- In this image, the system has correctly located two HYSE type fish within the same image.
+## 5. References & License
 
- **References:**
- [[https://towardsdatascience.com/faster-r-cnn-object-detection-implemented-by-keras-for-custom-data-from-googles-open-images-125f62b9141a]{.ul}](https://towardsdatascience.com/faster-r-cnn-object-detection-implemented-by-keras-for-custom-data-from-googles-open-images-125f62b9141a)
+- Ren, S., He, K., Girshick, R., & Sun, J. (2015). *Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks*. Advances in Neural Information Processing Systems (NeurIPS).
+- Licensed under the [MIT License](./LICENSE).
